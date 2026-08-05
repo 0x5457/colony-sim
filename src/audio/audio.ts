@@ -98,7 +98,8 @@ export class AudioEngine {
       await this.ensure();
       return;
     }
-    const dir = `${base}/audio/`;
+    const root = base || (import.meta.env.BASE_URL as string || '');
+    const dir = `${root.replace(/\/$/, '')}/audio/`;
     const urls = Object.values(FILES).map((f) => dir + f);
     urls.push(...Object.values(BGM_FILES).map((f) => dir + f));
     const AC = window.AudioContext ?? (window as unknown as {
