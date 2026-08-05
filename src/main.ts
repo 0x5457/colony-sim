@@ -81,6 +81,7 @@ import { SoundController } from './audio/sound';
     game.spawnColonists();
     renderer.refreshLayers('nodes');
     renderer.refreshLayers('blueprints');
+    renderer.refreshLayers('units'); // rebuild colonist sprites after spawn
     ui.refresh();
   }
 

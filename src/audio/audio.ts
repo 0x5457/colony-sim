@@ -18,7 +18,12 @@
 
 export type BusName = 'Master' | 'Music' | 'SFX' | 'UI' | 'Ambience';
 
-const NOMINAL = -12; // dBFS staging at each leaf; limiter stays idle at rest
+const NOMINAL = -6; // dBFS staging at each leaf; the whole mix sits well below the
+                   // -6 limiter so it stays idle except as a safety net.
+// BGM is a continuous non-overlapping bed, so it runs hotter than the frequent
+// one-shot SFX to read clearly as background (still leaves the master well under
+// 0 dBFS). Source staging = NOMINAL + this boost.
+const BGM_BOOST_DB = 8;
 
 export interface AudioConfig {
   master: number; music: number; sfx: number; ui: number; ambience: number;
@@ -84,6 +89,11 @@ export class AudioEngine {
   private duckRecovery: ReturnType<typeof setTimeout> | null = null;
   private loaded = false;
 
+  // A mood requested before its clip finished loading (or before the context
+  // was unlocked) — replayed as soon as both are ready so the first BGM start
+  // never gets lost to a timing race.
+  private pendingBgm: BgmMood | null = null;
+
   /** True once the context exists and is running (usable to gate per-frame SFX). */
   isReady(): boolean {
     return this.ctx != null && this.ctx.state === 'running';
@@ -126,6 +136,13 @@ export class AudioEngine {
     }));
     this.loaded = true;
     await this.ensure();
+    // If a mood was requested while clips were still decoding, fire it now that
+    // the context is unlocked and buffers are ready (avoids a lost first start).
+    if (this.pendingBgm && !this.activeBgm && this.bgm[this.pendingBgm]) {
+      const m = this.pendingBgm;
+      this.pendingBgm = null;
+      this.setBgm(m);
+    }
   }
 
   private buildGraph(ctx: AudioContext): void {
@@ -221,8 +238,11 @@ export class AudioEngine {
 
   /** Crossfade the looping BGM to a new mood (adaptive music). */
   setBgm(mood: BgmMood): void {
-    if (!this.ready || !this.bgm[mood]) return;
+    if (!this.ctx || !this.ready) { this.pendingBgm = mood; return; }
     if (this.activeBgm === mood) return;
+    // Clip not loaded yet — remember the request and play it at load's end.
+    if (!this.bgm[mood]) { this.pendingBgm = mood; return; }
+    this.pendingBgm = null;
     const ctx = this.ctx!;
     const newBuf = this.bgm[mood]!;
     const src = ctx.createBufferSource();
@@ -231,10 +251,11 @@ export class AudioEngine {
     const g = ctx.createGain();
     src.connect(g).connect(this.bus('Music'));
     src.start(0);
+    const stage = NOMINAL + BGM_BOOST_DB + linearToDb(this.config.music);
     // crossfade 1.2s
     const t = ctx.currentTime;
     g.gain.setValueAtTime(dbToLinear(-40), t);
-    g.gain.setTargetAtTime(dbToLinear(NOMINAL + linearToDb(this.config.music)), t, 0.4);
+    g.gain.setTargetAtTime(dbToLinear(stage), t, 0.4);
 
     const old = this.bgmSource;
     if (old) {
